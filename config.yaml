@@ -1,0 +1,88 @@
+# Stock Selection Configuration
+
+# Step 1: Daily gain filters
+gain_range:
+  min: 3.0  # Minimum daily gain percentage
+  max: 8.0  # Maximum daily gain percentage
+
+# Step 2: Volume ratio filter
+volume_ratio:
+  min: 1.0  # Minimum volume ratio (current volume / average volume)
+
+# Step 3: Turnover rate filter
+turnover_rate:
+  min: 5.0   # Minimum turnover rate percentage
+  max: 10.0  # Maximum turnover rate percentage
+
+# Step 4: Market cap filter (in billions USD)
+market_cap:
+  min: 5.0   # Minimum market cap in billions
+  max: 5000.0  # Maximum market cap in billions
+
+# Step 5: Volume trend analysis
+volume_trend:
+  periods: 5  # Number of periods to check for increasing volume
+  threshold: 0.7  # Ratio of periods that should show increase
+
+# Step 6: Moving average alignment
+moving_averages:
+  short_term: 5   # Short-term MA period
+  medium_term: 20 # Medium-term MA period
+  long_term: 60   # Long-term MA period (60-day line)
+  alignment_tolerance: 0.02  # 2% tolerance for alignment
+
+# Step 7: Market strength comparison
+market_strength:
+  benchmark: "^GSPC"  # S&P 500 as market benchmark
+  lookback_days: 1    # Days to compare strength
+
+# Step 8: New high detection
+new_high:
+  lookback_days: 20  # Period to check for new highs
+  ma_support: 20     # MA period for support level
+
+# Data fetching settings
+data:
+  tickers_source: "most_active"  # Dynamic stock list source (top 250)
+  # Available sources:
+  #   - "most_active": Most traded stocks by volume (recommended)
+  #   - "day_gainers": Biggest percentage gainers today
+  #   - "day_losers": Biggest percentage losers today
+  #   - "aggressive_small_caps": Growth-focused small cap stocks
+  #   - "growth_technology_stocks": Tech sector growth stocks
+  #   - "undervalued_growth_stocks": Value + growth combination
+  #   - "undervalued_large_caps": Large cap value stocks
+  #   Plus 300+ other Yahoo Finance screeners available
+
+  history_period: "3mo"     # Data period for analysis
+  interval: "1d"            # Data interval
+
+# Backtesting settings
+backtest:
+  start_date: "2023-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 100000
+  position_size: 0.1  # 10% of capital per position
+  max_positions: 10
+  hold_days: 5  # Days to hold position
+  stop_loss: -0.05  # -5% stop loss
+  take_profit: 0.10  # 10% take profit
+
+# Optimization settings
+optimization:
+  enabled: true
+  method: "grid_search"  # grid_search, random_search, or bayesian
+  metrics: "sharpe_ratio"  # sharpe_ratio, total_return, win_rate
+  iterations: 50
+  parameters:
+    gain_range_min: [2.0, 3.0, 4.0]
+    gain_range_max: [4.0, 5.0, 6.0]
+    volume_ratio_min: [0.8, 1.0, 1.2]
+    turnover_rate_min: [3.0, 5.0, 7.0]
+    turnover_rate_max: [8.0, 10.0, 12.0]
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  output_dir: "logs"
+  save_results: true
