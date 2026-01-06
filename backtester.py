@@ -3,7 +3,7 @@ Backtesting engine for stock selection strategy
 """
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from datetime import datetime, timedelta
 import logging
 from data_fetcher import DataFetcher
@@ -69,28 +69,79 @@ class Backtester:
 
         logger.info(f"Generated {len(trading_days)} trading periods")
 
+        # Check if point-in-time data mode is enabled
+        use_pit_data = self.backtest_config.get('use_point_in_time_data', False)
+        all_historical_data = {}
+        benchmark_data = None
+
+        if use_pit_data:
+            # Download all historical data once for point-in-time backtesting
+            logger.info("Point-in-time mode enabled: downloading historical data for all tickers...")
+            download_start = start - timedelta(days=365)  # Extra year for technical indicators
+            all_historical_data = self.data_fetcher.bulk_download_historical_data(
+                tickers,
+                start_date=download_start.strftime('%Y-%m-%d'),
+                end_date=end.strftime('%Y-%m-%d')
+            )
+            logger.info(f"Downloaded data for {len(all_historical_data)} tickers")
+
+            # Also download benchmark data (S&P 500)
+            benchmark_ticker = self.selector.config.get('market_strength', {}).get('benchmark', '^GSPC')
+            benchmark_data = self.data_fetcher.fetch_stock_data(
+                benchmark_ticker,
+                start_date=download_start.strftime('%Y-%m-%d'),
+                end_date=end.strftime('%Y-%m-%d')
+            )
+            logger.info("Benchmark data downloaded")
+
         # Main backtest loop
         for i, selection_date in enumerate(trading_days):
             logger.debug(f"Processing {selection_date.strftime('%Y-%m-%d')} ({i+1}/{len(trading_days)})")
 
             # Close expired positions
             open_positions, realized_pnl = self._close_expired_positions(
-                open_positions, selection_date, current_capital
+                open_positions, selection_date, current_capital,
+                historical_data=all_historical_data if use_pit_data else None
             )
             current_capital += realized_pnl
 
             # Check stop loss and take profit
             open_positions, sl_tp_pnl = self._check_stop_loss_take_profit(
-                open_positions, selection_date, current_capital
+                open_positions, selection_date, current_capital,
+                historical_data=all_historical_data if use_pit_data else None
             )
             current_capital += sl_tp_pnl
 
             # Select new stocks if we have capital and open slots
             if len(open_positions) < self.max_positions:
-                # For backtesting, we need historical data at this point
-                # This is a simplified approach - in reality, you'd need point-in-time data
                 try:
-                    selected_stocks = self.selector.select_stocks(tickers)
+                    if use_pit_data:
+                        # Point-in-time selection using pre-downloaded data
+                        lookback_days = self.backtest_config.get('pit_lookback_days', 90)
+
+                        # Create point-in-time snapshot for this selection date
+                        pit_snapshot = self.data_fetcher.create_pit_snapshot(
+                            all_historical_data,
+                            as_of_date=selection_date,
+                            lookback_days=lookback_days
+                        )
+
+                        # Add benchmark data to snapshot
+                        if benchmark_data is not None:
+                            # Normalize timezone before comparison to avoid timezone mismatch errors
+                            benchmark_data.index = pd.to_datetime(benchmark_data.index)
+                            selection_date_tz = self._normalize_timezone(selection_date, benchmark_data.index)
+                            benchmark_slice = benchmark_data[benchmark_data.index <= selection_date_tz].tail(lookback_days)
+                            pit_snapshot["^GSPC"] = benchmark_slice
+
+                        # Select stocks using snapshot
+                        selected_stocks = self.selector.select_stocks_from_snapshot(
+                            pit_snapshot,
+                            analysis_date=selection_date
+                        )
+                    else:
+                        # Original simplified approach - uses current data (look-ahead bias)
+                        selected_stocks = self.selector.select_stocks(tickers)
 
                     # Open new positions
                     new_positions = self._open_positions(
@@ -109,7 +160,8 @@ class Backtester:
 
             # Calculate portfolio value
             portfolio_value = current_capital + self._calculate_open_positions_value(
-                open_positions, selection_date
+                open_positions, selection_date,
+                historical_data=all_historical_data if use_pit_data else None
             )
             self.portfolio_values.append({
                 'date': selection_date,
@@ -131,10 +183,18 @@ class Backtester:
 
         logger.info("Backtest completed")
         logger.info(f"Total trades: {len(self.trades)}")
-        logger.info(f"Final portfolio value: ${self.portfolio_values[-1]['value']:,.2f}")
-        logger.info(f"Total return: {self.metrics['total_return']:.2%}")
-        logger.info(f"Sharpe ratio: {self.metrics['sharpe_ratio']:.2f}")
-        logger.info(f"Win rate: {self.metrics['win_rate']:.2%}")
+
+        if self.portfolio_values:
+            logger.info(f"Final portfolio value: ${self.portfolio_values[-1]['value']:,.2f}")
+        else:
+            logger.warning("No portfolio values recorded")
+
+        if self.trades:
+            logger.info(f"Total return: {self.metrics['total_return']:.2%}")
+            logger.info(f"Sharpe ratio: {self.metrics['sharpe_ratio']:.2f}")
+            logger.info(f"Win rate: {self.metrics['win_rate']:.2%}")
+        else:
+            logger.warning("No trades generated during backtest - all stocks filtered out or insufficient capital")
 
         return {
             'trades': self.trades,
@@ -186,7 +246,8 @@ class Backtester:
         return positions
 
     def _close_position(self, position: Dict, exit_date: datetime,
-                       current_capital: float) -> float:
+                       current_capital: float,
+                       historical_data: Optional[Dict[str, pd.DataFrame]] = None) -> float:
         """
         Close a position and record the trade
 
@@ -194,12 +255,16 @@ class Backtester:
             position: Position dictionary
             exit_date: Exit date
             current_capital: Current capital
+            historical_data: Optional pre-loaded historical data dict (for point-in-time backtesting)
 
         Returns:
             Realized P&L
         """
-        # Fetch exit price (using close price on exit date)
-        df = self.data_fetcher.fetch_stock_data(position['ticker'], period="1y")
+        # Get exit price from historical data if available, otherwise fetch
+        if historical_data and position['ticker'] in historical_data:
+            df = historical_data[position['ticker']]
+        else:
+            df = self.data_fetcher.fetch_stock_data(position['ticker'], period="1y")
 
         if df is None or len(df) == 0:
             exit_price = position['entry_price']  # Assume no change
@@ -210,8 +275,14 @@ class Backtester:
             df.index = pd.to_datetime(df.index)
             # Handle timezone awareness
             exit_date_tz = self._normalize_timezone(exit_date, df.index)
-            closest_date = df.index[df.index <= exit_date_tz][-1] if any(df.index <= exit_date_tz) else df.index[0]
-            exit_price = df.loc[closest_date, 'Close']
+            # Filter to only data up to exit_date (point-in-time)
+            df_filtered = df[df.index <= exit_date_tz]
+            if len(df_filtered) == 0:
+                exit_price = position['entry_price']
+                logger.warning(f"No data for {position['ticker']} before {exit_date}, using entry price")
+            else:
+                closest_date = df_filtered.index[-1]
+                exit_price = df_filtered.loc[closest_date, 'Close']
 
         exit_value = position['shares'] * exit_price
         pnl = exit_value - position['entry_value']
@@ -236,7 +307,8 @@ class Backtester:
         return pnl
 
     def _close_expired_positions(self, positions: List[Dict], current_date: datetime,
-                                 current_capital: float) -> Tuple[List[Dict], float]:
+                                 current_capital: float,
+                                 historical_data: Optional[Dict[str, pd.DataFrame]] = None) -> Tuple[List[Dict], float]:
         """
         Close positions that have reached hold period
 
@@ -244,6 +316,7 @@ class Backtester:
             positions: List of open positions
             current_date: Current date
             current_capital: Current capital
+            historical_data: Optional pre-loaded historical data dict (for point-in-time backtesting)
 
         Returns:
             Tuple of (remaining positions, realized P&L)
@@ -256,7 +329,7 @@ class Backtester:
 
             if days_held >= self.hold_days:
                 position['exit_reason'] = 'time_limit'
-                pnl = self._close_position(position, current_date, current_capital)
+                pnl = self._close_position(position, current_date, current_capital, historical_data)
                 total_pnl += pnl
             else:
                 position['hold_days'] = days_held
@@ -265,7 +338,8 @@ class Backtester:
         return remaining_positions, total_pnl
 
     def _check_stop_loss_take_profit(self, positions: List[Dict], current_date: datetime,
-                                     current_capital: float) -> Tuple[List[Dict], float]:
+                                     current_capital: float,
+                                     historical_data: Optional[Dict[str, pd.DataFrame]] = None) -> Tuple[List[Dict], float]:
         """
         Check and execute stop loss and take profit orders
 
@@ -273,6 +347,7 @@ class Backtester:
             positions: List of open positions
             current_date: Current date
             current_capital: Current capital
+            historical_data: Optional pre-loaded historical data dict (for point-in-time backtesting)
 
         Returns:
             Tuple of (remaining positions, realized P&L)
@@ -281,8 +356,11 @@ class Backtester:
         total_pnl = 0
 
         for position in positions:
-            # Fetch current price
-            df = self.data_fetcher.fetch_stock_data(position['ticker'], period="1mo")
+            # Get current price from historical data if available, otherwise fetch
+            if historical_data and position['ticker'] in historical_data:
+                df = historical_data[position['ticker']]
+            else:
+                df = self.data_fetcher.fetch_stock_data(position['ticker'], period="1mo")
 
             if df is None or len(df) == 0:
                 remaining_positions.append(position)
@@ -291,8 +369,14 @@ class Backtester:
             df.index = pd.to_datetime(df.index)
             # Handle timezone awareness
             current_date_tz = self._normalize_timezone(current_date, df.index)
-            closest_date = df.index[df.index <= current_date_tz][-1] if any(df.index <= current_date_tz) else df.index[0]
-            current_price = df.loc[closest_date, 'Close']
+            # Filter to only data up to current_date (point-in-time)
+            df_filtered = df[df.index <= current_date_tz]
+            if len(df_filtered) == 0:
+                remaining_positions.append(position)
+                continue
+
+            closest_date = df_filtered.index[-1]
+            current_price = df_filtered.loc[closest_date, 'Close']
 
             # Calculate return
             position_return = (current_price / position['entry_price']) - 1
@@ -300,14 +384,14 @@ class Backtester:
             # Check stop loss
             if position_return <= self.stop_loss:
                 position['exit_reason'] = 'stop_loss'
-                pnl = self._close_position(position, current_date, current_capital)
+                pnl = self._close_position(position, current_date, current_capital, historical_data)
                 total_pnl += pnl
                 logger.debug(f"Stop loss triggered for {position['ticker']} at {position_return:.2%}")
 
             # Check take profit
             elif position_return >= self.take_profit:
                 position['exit_reason'] = 'take_profit'
-                pnl = self._close_position(position, current_date, current_capital)
+                pnl = self._close_position(position, current_date, current_capital, historical_data)
                 total_pnl += pnl
                 logger.debug(f"Take profit triggered for {position['ticker']} at {position_return:.2%}")
 
@@ -342,13 +426,15 @@ class Backtester:
                 return pd.Timestamp(dt).tz_localize(df_index.tz)
 
     def _calculate_open_positions_value(self, positions: List[Dict],
-                                        current_date: datetime) -> float:
+                                        current_date: datetime,
+                                        historical_data: Optional[Dict[str, pd.DataFrame]] = None) -> float:
         """
         Calculate current value of open positions
 
         Args:
             positions: List of open positions
             current_date: Current date
+            historical_data: Optional pre-loaded historical data dict (for point-in-time backtesting)
 
         Returns:
             Total value of open positions
@@ -356,7 +442,11 @@ class Backtester:
         total_value = 0
 
         for position in positions:
-            df = self.data_fetcher.fetch_stock_data(position['ticker'], period="1mo")
+            # Get price from historical data if available, otherwise fetch
+            if historical_data and position['ticker'] in historical_data:
+                df = historical_data[position['ticker']]
+            else:
+                df = self.data_fetcher.fetch_stock_data(position['ticker'], period="1mo")
 
             if df is None or len(df) == 0:
                 current_price = position['entry_price']
@@ -364,8 +454,13 @@ class Backtester:
                 df.index = pd.to_datetime(df.index)
                 # Handle timezone awareness
                 current_date_tz = self._normalize_timezone(current_date, df.index)
-                closest_date = df.index[df.index <= current_date_tz][-1] if any(df.index <= current_date_tz) else df.index[0]
-                current_price = df.loc[closest_date, 'Close']
+                # Filter to only data up to current_date (point-in-time)
+                df_filtered = df[df.index <= current_date_tz]
+                if len(df_filtered) == 0:
+                    current_price = position['entry_price']
+                else:
+                    closest_date = df_filtered.index[-1]
+                    current_price = df_filtered.loc[closest_date, 'Close']
 
             total_value += position['shares'] * current_price
 
@@ -379,7 +474,21 @@ class Backtester:
             Dictionary with performance metrics
         """
         if not self.trades or not self.portfolio_values:
-            return {}
+            # Return default metrics instead of empty dict to avoid KeyError
+            return {
+                'total_return': 0.0,
+                'total_trades': 0,
+                'winning_trades': 0,
+                'losing_trades': 0,
+                'win_rate': 0.0,
+                'avg_win': 0.0,
+                'avg_loss': 0.0,
+                'profit_factor': 0.0,
+                'sharpe_ratio': 0.0,
+                'max_drawdown': 0.0,
+                'final_value': self.initial_capital,
+                'total_pnl': 0.0
+            }
 
         # Total return
         final_value = self.portfolio_values[-1]['value']

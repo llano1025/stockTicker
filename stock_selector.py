@@ -4,6 +4,7 @@ Stock selector implementing the 8-step filtering process
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Tuple, Optional
+from datetime import datetime
 import logging
 from data_fetcher import DataFetcher
 
@@ -91,12 +92,81 @@ class StockSelector:
 
         return step8_stocks
 
-    def _step1_filter_gainers(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
+    def select_stocks_from_snapshot(self, data_snapshot: Dict[str, pd.DataFrame],
+                                    analysis_date: datetime) -> List[Dict]:
+        """
+        Select stocks from pre-loaded data snapshot (point-in-time data)
+
+        Args:
+            data_snapshot: Dictionary of ticker → DataFrame (point-in-time data)
+            analysis_date: Date being analyzed (for logging)
+
+        Returns:
+            List of selected stock dictionaries (same format as select_stocks)
+        """
+        logger.info(f"Starting 8-step selection with point-in-time data (as of {analysis_date.strftime('%Y-%m-%d')})...")
+        self._reset_stats()
+
+        # Extract tickers from snapshot
+        tickers = list(data_snapshot.keys())
+
+        # Step 1: Filter by daily gains - use preloaded data
+        step1_stocks = self._step1_filter_gainers(tickers, preloaded_data=data_snapshot)
+        self.selection_stats['step1_gainers'] = len(step1_stocks)
+        logger.info(f"Step 1: {len(step1_stocks)} stocks with 3%-8% gains")
+
+        if not step1_stocks:
+            logger.warning("No stocks passed Step 1 (gainers filter)")
+            return []
+
+        # Step 2: Remove volume ratio < 1
+        step2_stocks = self._step2_filter_volume_ratio(step1_stocks)
+        self.selection_stats['step2_volume_ratio'] = len(step2_stocks)
+        logger.info(f"Step 2: {len(step2_stocks)} stocks with volume ratio >= 1")
+
+        # Step 3: Remove turnover rate < 5% and > 10%
+        step3_stocks = self._step3_filter_turnover_rate(step2_stocks)
+        self.selection_stats['step3_turnover_rate'] = len(step3_stocks)
+        logger.info(f"Step 3: {len(step3_stocks)} stocks with turnover rate 3%-10%")
+
+        # Step 4: Remove market cap < $50B and > $200B
+        step4_stocks = self._step4_filter_market_cap(step3_stocks)
+        self.selection_stats['step4_market_cap'] = len(step4_stocks)
+        logger.info(f"Step 4: {len(step4_stocks)} stocks with market cap $5B-$500B")
+
+        # Step 5: Keep continuously increasing volume
+        step5_stocks = self._step5_filter_volume_trend(step4_stocks)
+        self.selection_stats['step5_volume_trend'] = len(step5_stocks)
+        logger.info(f"Step 5: {len(step5_stocks)} stocks with increasing volume trend")
+
+        # Step 6: Short-term MA aligns with 60-day line pointing upward
+        step6_stocks = self._step6_filter_ma_alignment(step5_stocks)
+        self.selection_stats['step6_ma_alignment'] = len(step6_stocks)
+        logger.info(f"Step 6: {len(step6_stocks)} stocks with MA alignment")
+
+        # Step 7: Stronger than the market - benchmark should be in snapshot as "^GSPC"
+        step7_stocks = self._step7_filter_market_strength(step6_stocks, benchmark_data=data_snapshot.get("^GSPC"))
+        self.selection_stats['step7_market_strength'] = len(step7_stocks)
+        logger.info(f"Step 7: {len(step7_stocks)} stocks stronger than market")
+
+        # Step 8: Hit new highs at end of day
+        step8_stocks = self._step8_filter_new_highs(step7_stocks)
+        self.selection_stats['step8_new_highs'] = len(step8_stocks)
+        logger.info(f"Step 8: {len(step8_stocks)} stocks hitting new highs")
+
+        self.selection_stats['final_selected'] = len(step8_stocks)
+        logger.info(f"Final selection: {len(step8_stocks)} stocks")
+
+        return step8_stocks
+
+    def _step1_filter_gainers(self, tickers: List[str],
+                             preloaded_data: Optional[Dict[str, pd.DataFrame]] = None) -> Dict[str, pd.DataFrame]:
         """
         Step 1: Add stocks with 3%-5% gains to watchlist
 
         Args:
             tickers: List of ticker symbols
+            preloaded_data: Optional pre-loaded data snapshot (for point-in-time backtesting)
 
         Returns:
             Dictionary of ticker -> DataFrame for stocks meeting criteria
@@ -104,7 +174,29 @@ class StockSelector:
         min_gain = self.config['gain_range']['min']
         max_gain = self.config['gain_range']['max']
 
-        return self.data_fetcher.get_gainers(tickers, min_gain, max_gain)
+        # If preloaded data is provided, use it instead of fetching
+        if preloaded_data is not None:
+            filtered = {}
+            for ticker in tickers:
+                if ticker not in preloaded_data:
+                    continue
+
+                df = preloaded_data[ticker]
+                if df.empty or 'Returns' not in df.columns:
+                    continue
+
+                # Check latest return
+                latest_return = df['Returns'].iloc[-1]
+                if not np.isnan(latest_return):
+                    return_pct = latest_return * 100
+                    if min_gain <= return_pct <= max_gain:
+                        filtered[ticker] = df
+                        logger.debug(f"{ticker}: Daily gain {return_pct:.2f}%")
+
+            return filtered
+        else:
+            # Use existing logic for real-time selection
+            return self.data_fetcher.get_gainers(tickers, min_gain, max_gain)
 
     def _step2_filter_volume_ratio(self, stocks: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
         """
@@ -257,12 +349,14 @@ class StockSelector:
 
         return filtered
 
-    def _step7_filter_market_strength(self, stocks: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    def _step7_filter_market_strength(self, stocks: Dict[str, pd.DataFrame],
+                                      benchmark_data: Optional[pd.DataFrame] = None) -> Dict[str, pd.DataFrame]:
         """
         Step 7: Keep stocks stronger than the market
 
         Args:
             stocks: Dictionary of ticker -> DataFrame
+            benchmark_data: Optional pre-loaded benchmark data (for point-in-time backtesting)
 
         Returns:
             Filtered dictionary
@@ -270,8 +364,11 @@ class StockSelector:
         benchmark_ticker = self.config['market_strength']['benchmark']
         lookback_days = self.config['market_strength']['lookback_days']
 
-        # Fetch market data
-        market_df = self.data_fetcher.fetch_market_data(benchmark_ticker)
+        # Use provided benchmark data if available, otherwise fetch it
+        if benchmark_data is not None:
+            market_df = benchmark_data
+        else:
+            market_df = self.data_fetcher.fetch_market_data(benchmark_ticker)
 
         if market_df is None or len(market_df) < lookback_days:
             logger.warning("Could not fetch market benchmark data, skipping Step 7")
