@@ -299,17 +299,19 @@ class DataFetcher:
         df['Returns'] = df['Close'].pct_change()
 
         # Volume ratio (current volume / 20-day average volume)
-        df['Volume_MA5'] = df['Volume'].rolling(window=5).mean()
-        df['Volume_Ratio'] = df['Volume'] / df['Volume_MA5']
+        df['Volume_MA20'] = df['Volume'].rolling(window=20).mean()
+        df['Volume_Ratio'] = df['Volume'] / df['Volume_MA20']
 
         # Moving averages
         df['MA5'] = df['Close'].rolling(window=5).mean()
         df['MA20'] = df['Close'].rolling(window=20).mean()
         df['MA60'] = df['Close'].rolling(window=60).mean()
 
-        # Turnover rate approximation (volume / shares outstanding)
-        # Note: This is simplified; actual turnover rate needs shares outstanding
-        df['Turnover_Approx'] = (df['Volume'] / df['Volume'].mean()) * 5  # Rough estimate
+        # Turnover rate approximation used as fallback when float shares are unavailable.
+        # Expresses today's volume as a percentage of the 90-day mean volume, which
+        # produces values in a similar range to actual US turnover rates (0.5%–5%).
+        vol_mean = df['Volume'].mean()
+        df['Turnover_Approx'] = (df['Volume'] / vol_mean) * 1.5 if vol_mean > 0 else 0.0
 
         # Price momentum
         df['Momentum_5'] = df['Close'] / df['Close'].shift(5) - 1

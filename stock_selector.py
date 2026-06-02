@@ -43,10 +43,10 @@ class StockSelector:
         logger.info("Starting 8-step stock selection process...")
         self._reset_stats()
 
-        # Step 1: Filter by daily gains (3%-5%)
+        # Step 1: Filter by daily gains (3%-50%)
         step1_stocks = self._step1_filter_gainers(tickers)
         self.selection_stats['step1_gainers'] = len(step1_stocks)
-        logger.info(f"Step 1: {len(step1_stocks)} stocks with 3%-8% gains")
+        logger.info(f"Step 1: {len(step1_stocks)} stocks with 3%-50% gains")
 
         if not step1_stocks:
             logger.warning("No stocks passed Step 1 (gainers filter)")
@@ -57,15 +57,15 @@ class StockSelector:
         self.selection_stats['step2_volume_ratio'] = len(step2_stocks)
         logger.info(f"Step 2: {len(step2_stocks)} stocks with volume ratio >= 1")
 
-        # Step 3: Remove turnover rate < 5% and > 10%
+        # Step 3: Remove turnover rate < 3% and > 10%
         step3_stocks = self._step3_filter_turnover_rate(step2_stocks)
         self.selection_stats['step3_turnover_rate'] = len(step3_stocks)
         logger.info(f"Step 3: {len(step3_stocks)} stocks with turnover rate 3%-10%")
 
-        # Step 4: Remove market cap < $50B and > $200B
+        # Step 4: Remove market cap < $50B
         step4_stocks = self._step4_filter_market_cap(step3_stocks)
         self.selection_stats['step4_market_cap'] = len(step4_stocks)
-        logger.info(f"Step 4: {len(step4_stocks)} stocks with market cap $5B-$500B")
+        logger.info(f"Step 4: {len(step4_stocks)} stocks with market cap $5B-$2000B")
 
         # Step 5: Keep continuously increasing volume
         step5_stocks = self._step5_filter_volume_trend(step4_stocks)
@@ -113,7 +113,7 @@ class StockSelector:
         # Step 1: Filter by daily gains - use preloaded data
         step1_stocks = self._step1_filter_gainers(tickers, preloaded_data=data_snapshot)
         self.selection_stats['step1_gainers'] = len(step1_stocks)
-        logger.info(f"Step 1: {len(step1_stocks)} stocks with 3%-8% gains")
+        logger.info(f"Step 1: {len(step1_stocks)} stocks with 3%-10% gains")
 
         if not step1_stocks:
             logger.warning("No stocks passed Step 1 (gainers filter)")
@@ -132,7 +132,7 @@ class StockSelector:
         # Step 4: Remove market cap < $50B and > $200B
         step4_stocks = self._step4_filter_market_cap(step3_stocks)
         self.selection_stats['step4_market_cap'] = len(step4_stocks)
-        logger.info(f"Step 4: {len(step4_stocks)} stocks with market cap $5B-$500B")
+        logger.info(f"Step 4: {len(step4_stocks)} stocks with market cap $5B-$2000B")
 
         # Step 5: Keep continuously increasing volume
         step5_stocks = self._step5_filter_volume_trend(step4_stocks)

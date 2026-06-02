@@ -304,7 +304,7 @@ class Backtester:
         self.trades.append(trade)
         position['status'] = 'closed'
 
-        return pnl
+        return exit_value  # Return full exit value so principal is restored to current_capital
 
     def _close_expired_positions(self, positions: List[Dict], current_date: datetime,
                                  current_capital: float,

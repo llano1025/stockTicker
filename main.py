@@ -94,10 +94,10 @@ def mode_select_stocks(config: dict):
     logger.info("=" * 80)
     logger.info("SELECTION FUNNEL")
     logger.info("=" * 80)
-    logger.info(f"Step 1 - Gainers (3%-5%):           {stats['step1_gainers']}")
+    logger.info(f"Step 1 - Gainers (3%-50%):          {stats['step1_gainers']}")
     logger.info(f"Step 2 - Volume Ratio >= 1:         {stats['step2_volume_ratio']}")
     logger.info(f"Step 3 - Turnover Rate 5%-10%:      {stats['step3_turnover_rate']}")
-    logger.info(f"Step 4 - Market Cap $50B-$200B:     {stats['step4_market_cap']}")
+    logger.info(f"Step 4 - Market Cap $5B-$2000B:     {stats['step4_market_cap']}")
     logger.info(f"Step 5 - Volume Trend Increasing:   {stats['step5_volume_trend']}")
     logger.info(f"Step 6 - MA Alignment:              {stats['step6_ma_alignment']}")
     logger.info(f"Step 7 - Stronger than Market:      {stats['step7_market_strength']}")
@@ -277,7 +277,7 @@ def main():
         #     mode_optimize(config)
 
         # mode_select_stocks(config)
-        mode_backtest(config)
+        mode_optimize(config)
 
         logger.info("\nExecution completed successfully!")
 

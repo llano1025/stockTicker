@@ -3,7 +3,7 @@
 # Step 1: Daily gain filters
 gain_range:
   min: 3.0  # Minimum daily gain percentage
-  max: 8.0  # Maximum daily gain percentage
+  max: 50.0  # Maximum daily gain percentage
 
 # Step 2: Volume ratio filter
 volume_ratio:
@@ -11,18 +11,18 @@ volume_ratio:
 
 # Step 3: Turnover rate filter
 turnover_rate:
-  min: 5.0   # Minimum turnover rate percentage
-  max: 10.0  # Maximum turnover rate percentage
+  min: 3.0   # Minimum turnover rate percentage
+  max: 10.0   # Maximum turnover rate percentage
 
 # Step 4: Market cap filter (in billions USD)
 market_cap:
   min: 5.0   # Minimum market cap in billions
-  max: 5000.0  # Maximum market cap in billions
+  max: 2000.0  # Maximum market cap in billions
 
 # Step 5: Volume trend analysis
 volume_trend:
   periods: 5  # Number of periods to check for increasing volume
-  threshold: 0.7  # Ratio of periods that should show increase
+  threshold: 0.6  # Ratio of periods that should show increase
 
 # Step 6: Moving average alignment
 moving_averages:
@@ -59,14 +59,14 @@ data:
 
 # Backtesting settings
 backtest:
-  start_date: "2024-11-01"
-  end_date: "2024-12-31"
+  start_date: "2025-09-01"
+  end_date: "2025-09-30"
   initial_capital: 100000
   position_size: 0.1  # 10% of capital per position
   max_positions: 10
   hold_days: 5  # Days to hold position
-  stop_loss: -0.05  # -5% stop loss
-  take_profit: 0.10  # 10% take profit
+  stop_loss: -0.10  # -10% stop loss
+  take_profit: 0.20  # 20% take profit
 
   # Point-in-time data settings (eliminates look-ahead bias)
   use_point_in_time_data: true  # Enable true point-in-time backtesting (default: false for backward compatibility)
