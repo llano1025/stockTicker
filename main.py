@@ -5,11 +5,28 @@ import yaml
 import logging
 import argparse
 import os
+import requests
 from datetime import datetime
 from data_fetcher import DataFetcher
 from stock_selector import StockSelector
 from backtester import Backtester
 from optimizer import StrategyOptimizer
+
+
+def send_telegram(text: str):
+    """Send a message via Telegram bot. Reads token and chat_id from env vars."""
+    token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+    if not token or not chat_id:
+        return
+    try:
+        requests.post(
+            f'https://api.telegram.org/bot{token}/sendMessage',
+            json={'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'},
+            timeout=10
+        )
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Telegram notification failed: {e}")
 
 
 def setup_logging(config: dict):
@@ -104,6 +121,34 @@ def mode_select_stocks(config: dict):
     logger.info(f"Step 8 - New Highs:                 {stats['step8_new_highs']}")
     logger.info(f"FINAL - Selected Stocks:            {stats['final_selected']}")
     logger.info("=" * 80)
+
+    # Send Telegram notification
+    date_str = datetime.now().strftime('%Y-%m-%d %H:%M HKT')
+    lines = [f"<b>📈 Daily Stock Selection</b>  {date_str}", ""]
+    lines += [
+        "<b>Filter Funnel:</b>",
+        f"1 Gainers 3-50%:       {stats['step1_gainers']}",
+        f"2 Volume Ratio ≥1:     {stats['step2_volume_ratio']}",
+        f"3 Turnover 5-10%:      {stats['step3_turnover_rate']}",
+        f"4 Market Cap:          {stats['step4_market_cap']}",
+        f"5 Volume Trend:        {stats['step5_volume_trend']}",
+        f"6 MA Alignment:        {stats['step6_ma_alignment']}",
+        f"7 vs Market:           {stats['step7_market_strength']}",
+        f"8 New Highs:           {stats['step8_new_highs']}",
+        f"✅ Final:              {stats['final_selected']}",
+        "",
+    ]
+    if not selected_stocks:
+        lines.append("No stocks passed all 8 filters today.")
+    else:
+        lines.append("<b>Selected Stocks:</b>")
+        for i, s in enumerate(selected_stocks, 1):
+            lines.append(
+                f"{i}. <b>{s['ticker']}</b>  ${s['close']:.2f}  +{s['gain']:.2f}%"
+                f"  Vol×{s['volume_ratio']:.1f}"
+                + ("  🔺New High" if s.get('is_new_high') else "")
+            )
+    send_telegram("\n".join(lines))
 
 
 def mode_backtest(config: dict):
@@ -268,16 +313,12 @@ def main():
     logger.info(f"Config: {args.config}")
 
     try:
-        # # Execute based on mode
-        # if args.mode == 'select':
-        #     mode_select_stocks(config)
-        # elif args.mode == 'backtest':
-        #     mode_backtest(config)
-        # elif args.mode == 'optimize':
-        #     mode_optimize(config)
-
-        # mode_select_stocks(config)
-        mode_optimize(config)
+        if args.mode == 'select':
+            mode_select_stocks(config)
+        elif args.mode == 'backtest':
+            mode_backtest(config)
+        elif args.mode == 'optimize':
+            mode_optimize(config)
 
         logger.info("\nExecution completed successfully!")
 
